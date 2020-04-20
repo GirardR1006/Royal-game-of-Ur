@@ -1,3 +1,9 @@
+//TODO: rework and simplify the data
+//structures to not call unnecessary references
+//like some annoying dudes trying to convince
+//you that watching the office means having a
+//personality
+
 use rand::Rng;
 
 #[derive(Copy, Clone)]
@@ -44,9 +50,8 @@ impl Cell {
     fn is_empty (&self) -> bool{
         self.1 == CellVal::Empty
     }
-    fn check_possible_move(&self, p: &Player) -> PossibleMove {
-        let p_id = p.id;
-        match self.1 == p_id {
+    fn check_possible_move(&self, id: &CellVal) -> PossibleMove {
+        match &self.1 == id {
             true => PossibleMove::Blocked,
             false => match &self.1 {
                 CellVal::Empty => match self.0 {
@@ -79,10 +84,6 @@ impl Cell {
 
 struct Player {
     points: u32, //number of points
-    safe_line : [Cell;6],
-    //the safe part of the board, where the players can safely move
-    //first four cells are the starting point, then the player are
-    //moving to the battle line
     id : CellVal
 }
 impl Player {
@@ -95,39 +96,148 @@ impl Player {
             new_player"),
         };
         Player {points: 0,
-        safe_line:
-            [
-            Cell(CellKind::Normal,CellVal::Empty),
-            Cell(CellKind::Normal,CellVal::Empty),
-            Cell(CellKind::Normal,CellVal::Empty),
-            Cell(CellKind::Rosetta,CellVal::Empty),
-            Cell(CellKind::Normal,CellVal::Empty),
-            Cell(CellKind::Rosetta,CellVal::Empty),
-            ],
             id  : id,
         }
     }
 }
-struct Board {
-    battle_line : [Cell;8], //the line where the players fight
+struct Game {
+    //the battle part of the board where the players
+    //fight against each other
+    b_line:[Cell;8],
+    //the safe part of the board, where the players can safely move
+    //first four cells are the starting point, then the player are
+    //moving to the battle line
+    p1_line:[Cell;6],
+    p2_line:[Cell;6],
+    p1:Player,
+    p2:Player
 }
-impl Board{
-    fn new_board () -> Board {
-        Board {battle_line:
-            [
-                Cell(CellKind::Normal,CellVal::Empty),
-                Cell(CellKind::Normal,CellVal::Empty),
-                Cell(CellKind::Rosetta,CellVal::Empty),
-                Cell(CellKind::Normal,CellVal::Empty),
-                Cell(CellKind::Normal,CellVal::Empty),
-                Cell(CellKind::Normal,CellVal::Empty),
-                Cell(CellKind::Normal,CellVal::Empty),
-                Cell(CellKind::Normal,CellVal::Empty),
-            ]}
+impl Game {
+    fn new_game () -> Game{
+        Game {b_line:[Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Rosetta,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        ],
+        p1_line:[Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Rosetta,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Rosetta,CellVal::Empty),
+        ],
+        p2_line:[Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Rosetta,CellVal::Empty),
+        Cell(CellKind::Normal,CellVal::Empty),
+        Cell(CellKind::Rosetta,CellVal::Empty),
+        ],
+        p1:Player::new_player(1),
+        p2:Player::new_player(2)
+        }
     }
-
-    fn pp_board (&self, p1: &Player, p2: &Player) {
-        let s_p2 = &p2.safe_line;
+    // Scan the player's safe line, 
+    // the board's battle line, and return
+    // the cell slices corresponding to the
+    // potential moves for existing tokens
+    fn potential_moves(&self, p: &Player) ->
+        (std::vec::Vec<usize>,std::vec::Vec<usize>) {
+            let p_safe = match p.id {
+                CellVal::P1 => &self.p1_line,
+                CellVal::P2 => &self.p2_line,
+            };
+            let b_line = &self.b_line;
+            //will store a list of index in safe_line and battle line
+            let mut s_moves = Vec::new();
+            let mut b_moves = Vec::new();
+            for (i,c) in p_safe.iter().enumerate(){
+                match &c.check_possible_move(p) {
+                    PossibleMove::Yes | PossibleMove::YesReroll => s_moves.push(i),
+                    _ => (),
+                }
+            }
+            for (i,c) in b_line.iter().enumerate(){
+                match &c.check_possible_move(p) {
+                    PossibleMove::Yes | PossibleMove::YesReroll => b_moves.push(i),
+                    _ => (),
+                }
+            }
+            (s_moves,b_moves)
+        }
+    // Move on a cell assumed to be either
+    // free or with an enemy on it
+    fn do_move(&mut self, p:&Player, c:&mut Cell){
+        match c.1 == p.id {
+            true => panic!("Error, this cell already
+            has one of your token"),
+            // replace current value by the cell
+            // by the player's id
+            false => {c.1 = p.id;},
+        }
+    }
+    // Select the next action to take between
+    // moving and adding a new token
+    // Currently just pick the first
+    // non-empty safe move, then battle move,
+    // then place a token
+    // TODO: rewrite to not use double mutable
+    // borrow
+    fn select_and_move(&mut self, p:&mut Player,
+                       s_moves:&Vec<usize>,
+                       b_moves:&Vec<usize>)
+        -> Result<(),usize>{
+            match s_moves[..].first() {
+                None => {
+                    match b_moves[..].first() {
+                        None => self.place_new_token(p),
+                        Some(idx) => Ok(self.do_move(p,&mut self.b_line[*idx])),
+                    }
+                },
+                Some(idx) => Ok(self.do_move(p,&mut p.safe_line[*idx])),
+            }
+        }
+    // Function placing a new token for player p
+    fn place_new_token(&mut self, id: &CellVal) -> Result<(),usize>{
+        let roll = roll_dice();
+        match roll {
+            0 => Ok (()),
+            i => {
+                let target_cell = match id {
+                    CellVal::P1 => self.p1_line[i-1],
+                    CellVal::P2 => self.p2_line[i-1],
+                    CellVal::Empty => panic!("lol"),
+                };
+                match target_cell.check_possible_move(id) {
+                    PossibleMove::Yes => {
+                        Ok(target_cell.1 = id)
+                    },
+                    //reroll if on rosetta, and go directly on battle line
+                    PossibleMove::YesReroll =>
+                        match roll_dice() {
+                            // if the new roll gives us nothing, move to the 
+                            // final safe_line
+                            0 => Ok(p.safe_line[3] = Cell(p.safe_line[3].0,p_id)),
+                            i => match self.b_line[i-1].check_possible_move(&p) {
+                                PossibleMove::Yes | PossibleMove::YesReroll =>
+                                    Ok (self.b_line[i-1] =
+                                        Cell(self.b_line[i-1].0,p_id)),
+                                PossibleMove::Blocked => Err(i-1),
+                                PossibleMove::CanEat => Err(i-1), //TODO: implement eating
+                            }
+                        }
+                    PossibleMove::Blocked => Err(roll),
+                    PossibleMove::CanEat => Err(roll), //should never happen
+                }
+            }
+        }
+    }
+    fn pp_game(&self) {
+        let s_p2 = &self.p2_line;
         let start_p2 = &s_p2[0..4];
         let end_p2 = &s_p2[4..6];
         println!(" _  _  _  _     _  _");
@@ -141,13 +251,13 @@ impl Board{
         println!("");
         println!(" _  _  _  _     _  _");
         println!(" _  _  _  _  _  _  _  _");
-        let b_l = &self.battle_line;
+        let b_l = &self.b_line;
         for cell in b_l {
             cell.pp_cell();
         }
         println!("");
         println!(" _  _  _  _  _  _  _  _");
-        let s_p1 = &p1.safe_line;
+        let s_p1 = &self.p1_line;
         let start_p1 = &s_p1[0..4];
         let end_p1 = &s_p1[4..6];
         println!(" _  _  _  _     _  _");
@@ -160,79 +270,6 @@ impl Board{
         }
         println!("");
         println!(" _  _  _  _     _  _");
-    }
-} 
-
-struct Game {
-    board:Board,
-    p1:Player,
-    p2:Player
-}
-impl Game {
-    fn new_game () -> Game{
-        Game {board:Board::new_board(),
-        p1:Player::new_player(1),
-        p2:Player::new_player(2)
-        }
-    }
-    // Scan the player's safe line, 
-    // the board's battle line, and return
-    // the cell slices corresponding to the
-    // potential moves for existing tokens
-    fn potential_move(&self, p: &Player) ->
-        (std::vec::Vec<usize>,std::vec::Vec<usize>) {
-        let p_safe = &p.safe_line;
-        let b_line = &self.board.battle_line;
-        //will store a list of index in safe_line and battle line
-        let mut s_moves = Vec::new();
-        let mut b_moves = Vec::new();
-        for (i,c) in p_safe.iter().enumerate(){
-            match &c.check_possible_move(p) {
-                PossibleMove::Yes | PossibleMove::YesReroll => s_moves.push(i),
-                _ => (),
-            }
-        }
-        for (i,c) in b_line.iter().enumerate(){
-            match &c.check_possible_move(p) {
-                PossibleMove::Yes | PossibleMove::YesReroll => b_moves.push(i),
-                _ => (),
-            }
-        }
-        (s_moves,b_moves)
-    }
-    // Function placing a new token for player p
-    fn place_new_token(p:&mut Player, b: &mut Board) -> Result<(),usize>{
-        let roll = roll_dice();
-        match roll {
-            0 => Ok (()),
-            i => {
-                let p_id = p.id.clone();
-                let target_cell = p.safe_line[i-1].clone();
-                match target_cell.check_possible_move(&p) {
-                    PossibleMove::Yes => {
-                        Ok(p.safe_line[i-1] = Cell(target_cell.0,p_id))
-                    },
-                    //reroll if on rosetta, and go directly on battle line
-                    PossibleMove::YesReroll =>
-                        match roll_dice() {
-                        // if the new roll gives us nothing, move to the 
-                        // final safe_line
-                        0 => Ok(p.safe_line[3] = Cell(p.safe_line[3].0,p_id)),
-                        i => match b.battle_line[i-1].check_possible_move(&p) {
-                            PossibleMove::Yes | PossibleMove::YesReroll =>
-                                Ok (b.battle_line[i-1] = Cell(b.battle_line[i-1].0,p_id)),
-                            PossibleMove::Blocked => Err(i-1),
-                            PossibleMove::CanEat => Err(i-1), //TODO: implement eating
-                        }
-                    }
-                PossibleMove::Blocked => Err(roll),
-                PossibleMove::CanEat => Err(roll), //should never happen
-                }
-            }
-        }
-    }
-    fn pp_game(&self) {
-        Board::pp_board(&self.board,&self.p1,&self.p2);
     }
 }
 
@@ -247,7 +284,7 @@ fn roll_dice () -> usize {
     let d4 = rand::thread_rng().
         gen_range(0, 2);
     let roll = d1 + d2 + d3 + d4;
-    println!("roll result: {}", roll);
+    println!("Roll result: {}", roll);
     roll  
 }
 
@@ -255,12 +292,14 @@ fn main() {
     println!("Let us start a game!");
     let mut game = Game::new_game();
     &game.pp_game();
-    println!("Player 1 starts and place a token");
+    println!("Player 1 starts and places a token");
     //first move is always the same: players put a new token
-    let _ = Game::place_new_token(&mut game.p1, &mut game.board);
+    Game::place_new_token(&mut game, &mut game.p1);
     &game.pp_game();
-    println!("Player 2 starts and place a token");
-    let _ = Game::place_new_token(&mut game.p2, &mut game.board);
+    println!("Player 2 starts and places a token");
+    Game::place_new_token(&mut game, &mut game.p2);
     &game.pp_game();
+    let (s_moves,b_moves) = game.potential_moves(& game.p1);
+    //For now just select the first possible move, and proceed
 
 }
